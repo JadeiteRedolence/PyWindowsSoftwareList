@@ -79,23 +79,25 @@ def run_powershell_command(command, timeout=30):
     try:
         powershell_path = get_powershell_path()
         
-        # 构建完整命令
+        # 构建完整命令，确保使用UTF-8编码
         if powershell_path.endswith('pwsh.exe'):
-            # PowerShell 7+
+            # PowerShell 7+ 支持更好的Unicode
             full_cmd = [powershell_path, '-Command', command]
         else:
-            # Windows PowerShell 5.1
-            full_cmd = [powershell_path, '-Command', command]
+            # Windows PowerShell 5.1 - 在命令内部设置编码
+            encoded_cmd = f"[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $OutputEncoding = [System.Text.Encoding]::UTF8; {command}"
+            full_cmd = [powershell_path, '-Command', encoded_cmd]
         
         logging.debug(f"Executing PowerShell command with timeout {timeout}s: {command[:100]}...")
         
-        # 执行命令，带超时
+        # 执行命令，带超时，使用UTF-8编码并禁用错误处理
         result = subprocess.run(
             full_cmd, 
             capture_output=True, 
             text=True, 
             shell=False,  # 使用绝对路径，不需要shell=True
             encoding='utf-8',
+            errors='ignore',  # 忽略编码错误，防止崩溃
             timeout=timeout
         )
         
@@ -636,9 +638,31 @@ def collect_all_system_info():
     返回:
     - 包含所有系统信息的字典
     """
+    # 获取基本系统信息
+    basic_info = {
+        "platform": platform.platform(),
+        "system": platform.system(),
+        "release": platform.release(),
+        "version": platform.version(),
+        "architecture": platform.machine(),
+        "processor": platform.processor(),
+        "hostname": socket.gethostname(),
+        "ip_address": socket.gethostbyname(socket.gethostname()),
+        "mac_address": ':'.join(re.findall('..', '%012x' % uuid.getnode())),
+        "os": get_os_info(),
+        "hardware": {
+            "cpu": get_cpu_info(),
+            "memory": get_memory_info(),
+            "disks": get_disk_info(),
+            "graphics": get_graphics_info(),
+            "motherboard": get_motherboard_info(),
+            "bios": get_bios_info()
+        }
+    }
+    
     system_info = {
         "collection_time": datetime.now().isoformat(),
-        "basic_info": get_system_info(),
+        "basic_info": basic_info,
         "cpu": get_cpu_info(),
         "memory": get_memory_info(),
         "disk": get_disk_info(),

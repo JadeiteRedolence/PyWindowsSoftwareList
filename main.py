@@ -268,14 +268,14 @@ def create_comprehensive_html_report(data, output_path):
     logging.debug("Processing report sections")
     
     # Get hardware information
-    cpu_info = safe_get(system_info, ["cpu"], [])
+    cpu_info = safe_get(system_info, ["basic_info", "hardware", "cpu"], [])
     if isinstance(cpu_info, list) and cpu_info:
         cpu_rows = generate_table_rows(cpu_info, ["Name", "NumberOfCores", "NumberOfLogicalProcessors", "MaxClockSpeedGHz"], "N/A")
     else:
         cpu_rows = "<tr><td colspan='4'>No CPU information available</td></tr>"
     
     # Get memory information
-    memory_info = safe_get(system_info, ["memory"], {})
+    memory_info = safe_get(system_info, ["basic_info", "hardware", "memory"], {})
     memory_modules = safe_get(memory_info, ["modules"], [])
     if memory_modules:
         memory_module_rows = generate_table_rows(memory_modules, ["Capacity", "Speed", "Manufacturer", "PartNumber", "DeviceLocator"], "N/A")
@@ -286,7 +286,7 @@ def create_comprehensive_html_report(data, output_path):
     disk_info = {}
     
     # Try to get volumes first
-    volumes = safe_get(system_info, ["disk", "volumes"], [])
+    volumes = safe_get(system_info, ["basic_info", "hardware", "disks", "volumes"], [])
     if volumes:
         disk_info["volumes"] = volumes
         volume_rows = generate_table_rows(volumes, ["mountpoint", "SizeGB", "FreeGB", "UsedPercent", "fstype"], "N/A")
@@ -294,7 +294,7 @@ def create_comprehensive_html_report(data, output_path):
         volume_rows = "<tr><td colspan='5'>No volume information available</td></tr>"
     
     # Try to get physical disks
-    physical_disks = safe_get(system_info, ["disk", "physical_disks"], [])
+    physical_disks = safe_get(system_info, ["basic_info", "hardware", "disks", "physical_disks"], [])
     if physical_disks:
         disk_info["physical_disks"] = physical_disks
         physical_disk_rows = generate_table_rows(physical_disks, ["FriendlyName", "SizeFormatted", "MediaType", "HealthStatus"], "N/A")
@@ -302,7 +302,7 @@ def create_comprehensive_html_report(data, output_path):
         physical_disk_rows = "<tr><td colspan='4'>No physical disk information available</td></tr>"
     
     # Try to get basic disk info
-    basic_disk_info = safe_get(system_info, ["disk", "basic_disk_info"], [])
+    basic_disk_info = safe_get(system_info, ["basic_info", "hardware", "disks", "basic_disk_info"], [])
     if basic_disk_info:
         disk_info["basic_disk_info"] = basic_disk_info
         basic_disk_rows = generate_table_rows(basic_disk_info, ["device", "SizeGB", "FreeGB"], "N/A")
@@ -310,7 +310,7 @@ def create_comprehensive_html_report(data, output_path):
         basic_disk_rows = ""
     
     # Get graphics information
-    graphics_adapters = safe_get(system_info, ["graphics", "adapters"], [])
+    graphics_adapters = safe_get(system_info, ["basic_info", "hardware", "graphics", "adapters"], [])
     if graphics_adapters:
         graphics_rows = generate_table_rows(graphics_adapters, ["Name", "VideoRAM_GB", "DriverVersion"], "N/A")
     else:
@@ -324,10 +324,10 @@ def create_comprehensive_html_report(data, output_path):
         network_rows = "<tr><td colspan='5'>No network adapter information available</td></tr>"
     
     # Get motherboard information
-    motherboard_info = safe_get(system_info, ["hardware", "motherboard"], {})
+    motherboard_info = safe_get(system_info, ["basic_info", "hardware", "motherboard"], {})
     
     # Get BIOS information
-    bios_info = safe_get(system_info, ["hardware", "bios"], {})
+    bios_info = safe_get(system_info, ["basic_info", "hardware", "bios"], {})
     
     # Get PATH environment variables
     # From system environment variables
@@ -521,13 +521,13 @@ def create_comprehensive_html_report(data, output_path):
                 <h2>System Specifications</h2>
                 <table>
                     <tr><th>Property</th><th>Value</th></tr>
-                    <tr><td>Operating System</td><td>{safe_get(system_info, ['basic_info', 'system'], '')} {safe_get(system_info, ['basic_info', 'version'], '')}</td></tr>
-                    <tr><td>OS Version</td><td>{safe_get(system_info, ['basic_info', 'release'], '')}</td></tr>
-                    <tr><td>OS Build</td><td>{safe_get(system_info, ['hardware', 'os', 'build'], '')}</td></tr>
-                    <tr><td>Computer Name</td><td>{safe_get(system_info, ['basic_info', 'hostname'], 'Unknown')}</td></tr>
-                    <tr><td>Installation Date</td><td>{safe_get(system_info, ['hardware', 'os', 'installation_date'], 'Unknown')}</td></tr>
-                    <tr><td>System Architecture</td><td>{safe_get(system_info, ['basic_info', 'architecture'], 'Unknown')}</td></tr>
-                    <tr><td>System Drive</td><td>{safe_get(system_info, ['hardware', 'os', 'system_drive'], 'Unknown')}</td></tr>
+                    <tr><td>Operating System</td><td>{safe_get(system_info, ['basic_info', 'os', 'name'], '')} {safe_get(system_info, ['basic_info', 'os', 'version'], '')}</td></tr>
+                    <tr><td>OS Version</td><td>{safe_get(system_info, ['basic_info', 'os', 'release'], '')}</td></tr>
+                    <tr><td>OS Build</td><td>{safe_get(system_info, ['basic_info', 'os', 'build'], '')}</td></tr>
+                    <tr><td>Computer Name</td><td>{safe_get(system_info, ['basic_info', 'os', 'node'], 'Unknown')}</td></tr>
+                    <tr><td>Installation Date</td><td>{safe_get(system_info, ['basic_info', 'os', 'installation_date'], 'Unknown')}</td></tr>
+                    <tr><td>System Architecture</td><td>{safe_get(system_info, ['basic_info', 'os', 'architecture'], 'Unknown')}</td></tr>
+                    <tr><td>System Drive</td><td>{safe_get(system_info, ['basic_info', 'os', 'system_drive'], 'Unknown')}</td></tr>
                 </table>
                 
                 <h3>系统环境变量 PATH</h3>
@@ -562,9 +562,9 @@ def create_comprehensive_html_report(data, output_path):
                 <h2>内存 (RAM)</h2>
                 <div class="card">
                     <div class="card-title">总内存</div>
-                    <p><strong>容量:</strong> {safe_get(system_info, ['memory', 'total_gb'], 'Unknown')} GB</p>
-                    <p><strong>已使用:</strong> {safe_get(system_info, ['memory', 'used_gb'], 'Unknown')} GB ({safe_get(system_info, ['memory', 'percent'], 'Unknown')}%)</p>
-                    <p><strong>可用:</strong> {safe_get(system_info, ['memory', 'available_gb'], 'Unknown')} GB</p>
+                    <p><strong>容量:</strong> {safe_get(system_info, ['basic_info', 'hardware', 'memory', 'total_gb'], 'Unknown')} GB</p>
+                    <p><strong>已使用:</strong> {safe_get(system_info, ['basic_info', 'hardware', 'memory', 'used_gb'], 'Unknown')} GB ({safe_get(system_info, ['basic_info', 'hardware', 'memory', 'percent'], 'Unknown')}%)</p>
+                    <p><strong>可用:</strong> {safe_get(system_info, ['basic_info', 'hardware', 'memory', 'available_gb'], 'Unknown')} GB</p>
                 </div>
                 
                 <h3>内存条详情</h3>
@@ -770,7 +770,7 @@ def create_comprehensive_html_report(data, output_path):
                 <h3>Network Information</h3>
                 <table>
                     <tr><th>Property</th><th>Value</th></tr>
-                    <tr><td>Hostname</td><td>{safe_get(system_info, ['basic_info', 'hostname'], 'Unknown')}</td></tr>
+                    <tr><td>Hostname</td><td>{safe_get(system_info, ['basic_info', 'os', 'node'], 'Unknown')}</td></tr>
                     <tr><td>IP Address</td><td>{safe_get(system_info, ['basic_info', 'ip_address'], 'Unknown')}</td></tr>
                     <tr><td>MAC Address</td><td>{safe_get(system_info, ['basic_info', 'mac_address'], 'Unknown')}</td></tr>
                 </table>

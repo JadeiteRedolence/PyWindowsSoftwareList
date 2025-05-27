@@ -219,7 +219,6 @@ tmp/
 # Markdown reports (may contain sensitive data)
 *.md
 !README.md
-!WMI_FALLBACK_SOLUTION.md
 !docs/*.md
 !templates/*.md
 

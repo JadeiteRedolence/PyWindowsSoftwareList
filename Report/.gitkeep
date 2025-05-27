@@ -1,0 +1,2 @@
+# This file ensures the Report directory is included in the Git repository
+# Generated reports will be saved in timestamped subdirectories within this folder 

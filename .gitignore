@@ -53,7 +53,6 @@ coverage.xml
 *.pot
 
 # Django stuff:
-*.log
 local_settings.py
 db.sqlite3
 
@@ -94,6 +93,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+.conda/
 
 # Spyder project settings
 .spyderproject
@@ -113,31 +113,55 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
-# VSCode settings
+# pytype static type analyzer
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# IDE Settings
+# VSCode
 .vscode/
 *.code-workspace
 
-# PyCharm settings
+# PyCharm
 .idea/
 *.iml
 *.iws
 *.ipr
 
-# Project specific
-Report/*/
-!Report/README.md
-*.7z
-*.zip
-*.tar.gz
-*.rar
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
 
-# Windows specific
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# Operating System Files
+# Windows
 Thumbs.db
 ehthumbs.db
 Desktop.ini
 $RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
 
-# macOS specific
+# macOS
 .DS_Store
 .AppleDouble
 .LSOverride
@@ -146,15 +170,87 @@ Icon
 .Spotlight-V100
 .Trashes
 
+# Linux
+*~
+
+# Project Specific Files
+# Generated reports and output
+Report/*/
+!Report/README.md
+!Report/.gitkeep
+
 # Log files
 *.log
 logs/
+debug_*.log
 
-# Generated reports that might contain sensitive data
+# Temporary files
+temp/
+tmp/
+*.tmp
+*.temp
+
+# Archive files
+*.7z
+*.zip
+*.tar.gz
+*.rar
+*.gz
+*.bz2
+*.xz
+
+# Generated HTML reports (may contain sensitive data)
+*.html
+!templates/*.html
+!docs/*.html
+
+# Generated data files (may contain sensitive data)
+*.json
+!templates/*.json
+!config/*.json
+!docs/*.json
+
+# Excel files (may contain sensitive data)
 *.xlsx
 *.xls
-*.html
-*.json
-# Exceptions for template files
-!templates/*.html
-!templates/*.json 
+!templates/*.xlsx
+!templates/*.xls
+
+# Markdown reports (may contain sensitive data)
+*.md
+!README.md
+!docs/*.md
+!templates/*.md
+
+# Sensitive configuration files
+config.ini
+settings.ini
+secrets.json
+credentials.json
+
+# PowerShell temporary files
+*.ps1xml
+
+# System information cache
+system_cache/
+cache/
+
+# Test output
+test_output/
+test_reports/
+
+# Backup files
+*.bak
+*.backup
+*.old
+
+# Package files
+*.deb
+*.rpm
+*.pkg
+*.dmg
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3 

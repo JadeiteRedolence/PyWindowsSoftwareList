@@ -13,6 +13,105 @@ import ctypes
 import logging
 import shutil
 
+def get_powershell_path():
+    """
+    获取PowerShell的绝对路径
+    
+    返回:
+    - PowerShell执行文件的绝对路径
+    """
+    try:
+        # 常见的PowerShell路径列表
+        possible_paths = [
+            # PowerShell 7+ (cross-platform)
+            r"C:\Program Files\PowerShell\7\pwsh.exe",
+            r"C:\Program Files\PowerShell\7-preview\pwsh.exe", 
+            # Windows PowerShell 5.1
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            r"C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe",
+        ]
+        
+        # 检查每个可能的路径
+        for path in possible_paths:
+            if os.path.exists(path):
+                logging.debug(f"Found PowerShell at: {path}")
+                return path
+        
+        # 如果找不到，尝试使用where命令查找
+        try:
+            result = subprocess.run(['where', 'powershell'], capture_output=True, text=True, timeout=5)
+            if result.returncode == 0 and result.stdout.strip():
+                path = result.stdout.strip().split('\n')[0]
+                logging.debug(f"Found PowerShell via 'where' command: {path}")
+                return path
+        except (subprocess.TimeoutExpired, Exception) as e:
+            logging.warning(f"Error finding PowerShell with 'where' command: {e}")
+        
+        # 尝试查找pwsh
+        try:
+            result = subprocess.run(['where', 'pwsh'], capture_output=True, text=True, timeout=5)
+            if result.returncode == 0 and result.stdout.strip():
+                path = result.stdout.strip().split('\n')[0]
+                logging.debug(f"Found pwsh via 'where' command: {path}")
+                return path
+        except (subprocess.TimeoutExpired, Exception) as e:
+            logging.warning(f"Error finding pwsh with 'where' command: {e}")
+        
+        # 最后尝试默认路径
+        logging.warning("Could not find PowerShell absolute path, using 'powershell' as fallback")
+        return "powershell"
+        
+    except Exception as e:
+        logging.error(f"Error getting PowerShell path: {e}")
+        return "powershell"
+
+def run_powershell_command(command, timeout=30):
+    """
+    执行PowerShell命令，带超时机制
+    
+    参数:
+    - command: PowerShell命令字符串
+    - timeout: 超时时间（秒），默认30秒
+    
+    返回:
+    - subprocess.CompletedProcess对象
+    """
+    try:
+        powershell_path = get_powershell_path()
+        
+        # 构建完整命令
+        if powershell_path.endswith('pwsh.exe'):
+            # PowerShell 7+
+            full_cmd = [powershell_path, '-Command', command]
+        else:
+            # Windows PowerShell 5.1
+            full_cmd = [powershell_path, '-Command', command]
+        
+        logging.debug(f"Executing PowerShell command with timeout {timeout}s: {command[:100]}...")
+        
+        # 执行命令，带超时
+        result = subprocess.run(
+            full_cmd, 
+            capture_output=True, 
+            text=True, 
+            shell=False,  # 使用绝对路径，不需要shell=True
+            encoding='utf-8',
+            timeout=timeout
+        )
+        
+        if result.returncode != 0:
+            logging.warning(f"PowerShell command failed with return code {result.returncode}: {result.stderr[:200]}")
+        
+        return result
+        
+    except subprocess.TimeoutExpired as e:
+        logging.error(f"PowerShell command timed out after {timeout} seconds: {command[:100]}")
+        # 返回一个模拟的失败结果
+        return subprocess.CompletedProcess([], returncode=1, stdout="", stderr=f"Command timed out after {timeout} seconds")
+    except Exception as e:
+        logging.error(f"Error executing PowerShell command: {e}")
+        return subprocess.CompletedProcess([], returncode=1, stdout="", stderr=str(e))
+
 def get_system_info():
     """
     获取系统基本信息
@@ -47,8 +146,8 @@ def get_cpu_info():
         if platform.system() == "Windows":
             # 使用PowerShell获取CPU信息
             logging.debug("Getting CPU information")
-            cmd = "powershell -Command \"$PSDefaultParameterValues['Out-File:Encoding'] = 'utf8'; [System.Threading.Thread]::CurrentThread.CurrentCulture = 'en-US'; [System.Threading.Thread]::CurrentThread.CurrentUICulture = 'en-US'; Get-WmiObject -Class Win32_Processor | Select-Object Name, NumberOfCores, NumberOfLogicalProcessors, MaxClockSpeed, L2CacheSize, L3CacheSize | ConvertTo-Json\""
-            result = subprocess.run(cmd, capture_output=True, text=True, shell=True, encoding='utf-8')
+            cmd = "$PSDefaultParameterValues['Out-File:Encoding'] = 'utf8'; [System.Threading.Thread]::CurrentThread.CurrentCulture = 'en-US'; [System.Threading.Thread]::CurrentThread.CurrentUICulture = 'en-US'; Get-WmiObject -Class Win32_Processor | Select-Object Name, NumberOfCores, NumberOfLogicalProcessors, MaxClockSpeed, L2CacheSize, L3CacheSize | ConvertTo-Json"
+            result = run_powershell_command(cmd, timeout=20)
             
             if result.returncode == 0 and result.stdout.strip():
                 try:
@@ -137,8 +236,8 @@ def get_memory_info():
             
             # 尝试使用PowerShell获取内存模块信息
             logging.debug("Attempting to get memory module details via PowerShell")
-            cmd = "powershell -Command \"$PSDefaultParameterValues['Out-File:Encoding'] = 'utf8'; [System.Threading.Thread]::CurrentThread.CurrentCulture = 'en-US'; [System.Threading.Thread]::CurrentThread.CurrentUICulture = 'en-US'; Get-WmiObject -Class Win32_PhysicalMemory | Select-Object Capacity, Speed, Manufacturer, PartNumber, DeviceLocator | ConvertTo-Json\""
-            result = subprocess.run(cmd, capture_output=True, text=True, shell=True, encoding='utf-8')
+            cmd = "$PSDefaultParameterValues['Out-File:Encoding'] = 'utf8'; [System.Threading.Thread]::CurrentThread.CurrentCulture = 'en-US'; [System.Threading.Thread]::CurrentThread.CurrentUICulture = 'en-US'; Get-WmiObject -Class Win32_PhysicalMemory | Select-Object Capacity, Speed, Manufacturer, PartNumber, DeviceLocator | ConvertTo-Json"
+            result = run_powershell_command(cmd, timeout=15)
             
             if result.returncode == 0 and result.stdout.strip():
                 try:
@@ -232,8 +331,8 @@ def get_disk_info():
             try:
                 logging.debug("Attempting to get additional disk info via PowerShell")
                 # 使用英文区域设置执行PowerShell命令
-                cmd = "powershell -Command \"$PSDefaultParameterValues['Out-File:Encoding'] = 'utf8'; [System.Threading.Thread]::CurrentThread.CurrentCulture = 'en-US'; [System.Threading.Thread]::CurrentThread.CurrentUICulture = 'en-US'; Get-PhysicalDisk | Select-Object DeviceId, FriendlyName, MediaType, Size, HealthStatus | ConvertTo-Json\""
-                result = subprocess.run(cmd, capture_output=True, text=True, shell=True, encoding='utf-8')
+                cmd = "$PSDefaultParameterValues['Out-File:Encoding'] = 'utf8'; [System.Threading.Thread]::CurrentThread.CurrentCulture = 'en-US'; [System.Threading.Thread]::CurrentThread.CurrentUICulture = 'en-US'; Get-PhysicalDisk | Select-Object DeviceId, FriendlyName, MediaType, Size, HealthStatus | ConvertTo-Json"
+                result = run_powershell_command(cmd, timeout=20)
                 
                 if result.returncode == 0 and result.stdout.strip():
                     additional_disks = json.loads(result.stdout)
@@ -296,8 +395,8 @@ def get_graphics_info():
         if platform.system() == "Windows":
             # 使用PowerShell获取显卡信息
             logging.debug("Getting graphics card information")
-            cmd = "powershell -Command \"$PSDefaultParameterValues['Out-File:Encoding'] = 'utf8'; [System.Threading.Thread]::CurrentThread.CurrentCulture = 'en-US'; [System.Threading.Thread]::CurrentThread.CurrentUICulture = 'en-US'; Get-WmiObject -Class Win32_VideoController | Select-Object Name, AdapterRAM, DriverVersion, VideoProcessor | ConvertTo-Json\""
-            result = subprocess.run(cmd, capture_output=True, text=True, shell=True, encoding='utf-8')
+            cmd = "$PSDefaultParameterValues['Out-File:Encoding'] = 'utf8'; [System.Threading.Thread]::CurrentThread.CurrentCulture = 'en-US'; [System.Threading.Thread]::CurrentThread.CurrentUICulture = 'en-US'; Get-WmiObject -Class Win32_VideoController | Select-Object Name, AdapterRAM, DriverVersion, VideoProcessor | ConvertTo-Json"
+            result = run_powershell_command(cmd, timeout=15)
             
             if result.returncode == 0 and result.stdout.strip():
                 try:
@@ -343,8 +442,8 @@ def get_network_adapters():
     try:
         if platform.system() == "Windows":
             # 使用PowerShell获取网络适配器信息
-            cmd = "powershell -Command \"Get-NetAdapter | Select-Object Name, InterfaceDescription, Status, MacAddress, LinkSpeed | ConvertTo-Json\""
-            result = subprocess.run(cmd, capture_output=True, text=True, shell=True)
+            cmd = "Get-NetAdapter | Select-Object Name, InterfaceDescription, Status, MacAddress, LinkSpeed | ConvertTo-Json"
+            result = run_powershell_command(cmd, timeout=15)
             
             if result.returncode == 0 and result.stdout.strip():
                 adapters = json.loads(result.stdout)
@@ -359,8 +458,8 @@ def get_network_adapters():
                 for adapter in network_adapters:
                     try:
                         name = adapter.get("Name", "")
-                        cmd = f"powershell -Command \"Get-NetIPAddress -InterfaceAlias '{name}' | Select-Object IPAddress, PrefixLength, AddressFamily | ConvertTo-Json\""
-                        result = subprocess.run(cmd, capture_output=True, text=True, shell=True)
+                        cmd = f"Get-NetIPAddress -InterfaceAlias '{name}' | Select-Object IPAddress, PrefixLength, AddressFamily | ConvertTo-Json"
+                        result = run_powershell_command(cmd, timeout=10)
                         
                         if result.returncode == 0 and result.stdout.strip():
                             ip_data = json.loads(result.stdout)
@@ -393,8 +492,8 @@ def get_user_accounts():
     try:
         if platform.system() == "Windows":
             # 使用PowerShell获取本地用户账户信息
-            cmd = "powershell -Command \"Get-LocalUser | Select-Object Name, Enabled, PasswordRequired, LastLogon, Description | ConvertTo-Json\""
-            result = subprocess.run(cmd, capture_output=True, text=True, shell=True)
+            cmd = "Get-LocalUser | Select-Object Name, Enabled, PasswordRequired, LastLogon, Description | ConvertTo-Json"
+            result = run_powershell_command(cmd, timeout=10)
             
             if result.returncode == 0 and result.stdout.strip():
                 accounts = json.loads(result.stdout)
@@ -425,8 +524,8 @@ def get_installed_drivers():
     try:
         if platform.system() == "Windows":
             # 使用PowerShell获取驱动程序信息
-            cmd = "powershell -Command \"Get-WmiObject Win32_PnPSignedDriver | Where-Object {$_.DeviceName} | Select-Object DeviceName, DriverVersion, Manufacturer | ConvertTo-Json -Depth 1\""
-            result = subprocess.run(cmd, capture_output=True, text=True, shell=True)
+            cmd = "Get-WmiObject Win32_PnPSignedDriver | Where-Object {$_.DeviceName} | Select-Object DeviceName, DriverVersion, Manufacturer | ConvertTo-Json -Depth 1"
+            result = run_powershell_command(cmd, timeout=25)
             
             if result.returncode == 0 and result.stdout.strip():
                 driver_data = json.loads(result.stdout)
@@ -457,8 +556,8 @@ def get_startup_items():
     try:
         if platform.system() == "Windows":
             # 使用PowerShell获取开机启动项
-            cmd = "powershell -Command \"Get-CimInstance Win32_StartupCommand | Select-Object Name, Command, Location, User | ConvertTo-Json\""
-            result = subprocess.run(cmd, capture_output=True, text=True, shell=True)
+            cmd = "Get-CimInstance Win32_StartupCommand | Select-Object Name, Command, Location, User | ConvertTo-Json"
+            result = run_powershell_command(cmd, timeout=15)
             
             if result.returncode == 0 and result.stdout.strip():
                 items = json.loads(result.stdout)
@@ -489,8 +588,8 @@ def get_scheduled_tasks():
     try:
         if platform.system() == "Windows":
             # 使用PowerShell获取计划任务
-            cmd = "powershell -Command \"Get-ScheduledTask | Where-Object {$_.State -ne 'Disabled'} | Select-Object TaskName, TaskPath, State | ConvertTo-Json\""
-            result = subprocess.run(cmd, capture_output=True, text=True, shell=True)
+            cmd = "Get-ScheduledTask | Where-Object {$_.State -ne 'Disabled'} | Select-Object TaskName, TaskPath, State | ConvertTo-Json"
+            result = run_powershell_command(cmd, timeout=20)
             
             if result.returncode == 0 and result.stdout.strip():
                 tasks = json.loads(result.stdout)
@@ -658,8 +757,8 @@ def get_motherboard_info():
     try:
         # 使用PowerShell代替WMI直接调用
         logging.debug("Getting motherboard information")
-        ps_cmd = 'powershell -Command "$PSDefaultParameterValues[\'Out-File:Encoding\'] = \'utf8\'; [System.Threading.Thread]::CurrentThread.CurrentCulture = \'en-US\'; [System.Threading.Thread]::CurrentThread.CurrentUICulture = \'en-US\'; Get-WmiObject Win32_BaseBoard | Select-Object Manufacturer, Product, SerialNumber, Version | ConvertTo-Json"'
-        result = subprocess.run(ps_cmd, capture_output=True, text=True, shell=True, encoding='utf-8')
+        ps_cmd = "$PSDefaultParameterValues['Out-File:Encoding'] = 'utf8'; [System.Threading.Thread]::CurrentThread.CurrentCulture = 'en-US'; [System.Threading.Thread]::CurrentThread.CurrentUICulture = 'en-US'; Get-WmiObject Win32_BaseBoard | Select-Object Manufacturer, Product, SerialNumber, Version | ConvertTo-Json"
+        result = run_powershell_command(ps_cmd, timeout=15)
         
         if result.returncode == 0 and result.stdout.strip():
             try:
@@ -673,8 +772,8 @@ def get_motherboard_info():
             logging.warning(f"Failed to get motherboard info: {result.stderr}")
             
             # 简单的解析方法作为后备
-            cmd = 'powershell -Command "Get-WmiObject Win32_BaseBoard | Format-List Manufacturer, Product, SerialNumber, Version"'
-            result = subprocess.run(cmd, capture_output=True, text=True, shell=True, encoding='utf-8')
+            cmd = "Get-WmiObject Win32_BaseBoard | Format-List Manufacturer, Product, SerialNumber, Version"
+            result = run_powershell_command(cmd, timeout=10)
             
             if result.returncode == 0:
                 for line in result.stdout.split('\n'):
@@ -699,8 +798,8 @@ def get_bios_info():
     try:
         # 使用PowerShell代替WMI直接调用
         logging.debug("Getting BIOS information")
-        ps_cmd = 'powershell -Command "$PSDefaultParameterValues[\'Out-File:Encoding\'] = \'utf8\'; [System.Threading.Thread]::CurrentThread.CurrentCulture = \'en-US\'; [System.Threading.Thread]::CurrentThread.CurrentUICulture = \'en-US\'; Get-WmiObject Win32_BIOS | Select-Object Manufacturer, Name, SMBIOSBIOSVersion, ReleaseDate | ConvertTo-Json"'
-        result = subprocess.run(ps_cmd, capture_output=True, text=True, shell=True, encoding='utf-8')
+        ps_cmd = "$PSDefaultParameterValues['Out-File:Encoding'] = 'utf8'; [System.Threading.Thread]::CurrentThread.CurrentCulture = 'en-US'; [System.Threading.Thread]::CurrentThread.CurrentUICulture = 'en-US'; Get-WmiObject Win32_BIOS | Select-Object Manufacturer, Name, SMBIOSBIOSVersion, ReleaseDate | ConvertTo-Json"
+        result = run_powershell_command(ps_cmd, timeout=15)
         
         if result.returncode == 0 and result.stdout.strip():
             try:
@@ -714,8 +813,8 @@ def get_bios_info():
             logging.warning(f"Failed to get BIOS info: {result.stderr}")
             
             # 简单的解析方法作为后备
-            cmd = 'powershell -Command "Get-WmiObject Win32_BIOS | Format-List Manufacturer, Name, SMBIOSBIOSVersion, ReleaseDate"'
-            result = subprocess.run(cmd, capture_output=True, text=True, shell=True, encoding='utf-8')
+            cmd = "Get-WmiObject Win32_BIOS | Format-List Manufacturer, Name, SMBIOSBIOSVersion, ReleaseDate"
+            result = run_powershell_command(cmd, timeout=10)
             
             if result.returncode == 0:
                 for line in result.stdout.split('\n'):

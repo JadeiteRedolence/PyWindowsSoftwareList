@@ -3,6 +3,7 @@ import subprocess
 import json
 from datetime import datetime
 import xml.etree.ElementTree as ET
+from .system_info_collector import run_powershell_command
 
 def get_wifi_profiles():
     """

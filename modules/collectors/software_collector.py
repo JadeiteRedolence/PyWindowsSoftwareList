@@ -3,6 +3,7 @@ import subprocess
 import json
 import winreg
 from datetime import datetime
+from .system_info_collector import run_powershell_command
 
 def get_installed_software_from_registry(registry_key, flag=0):
     """
@@ -103,7 +104,7 @@ def get_installed_software_from_powershell():
         ps_command = "Get-ItemProperty HKLM:\\Software\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*, HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\* | Where-Object { $_.DisplayName -ne $null } | Select-Object DisplayName, DisplayVersion, Publisher, InstallDate | ConvertTo-Json"
         
         # 执行PowerShell命令
-        result = subprocess.run(["powershell", "-Command", ps_command], capture_output=True, text=True)
+        result = run_powershell_command(ps_command, timeout=30)
         
         if result.returncode == 0 and result.stdout.strip():
             # 解析JSON结果
@@ -155,7 +156,7 @@ def get_uwp_apps():
         ps_command = "Get-AppxPackage | Select-Object Name, PackageFullName, Version, Publisher | ConvertTo-Json"
         
         # 执行PowerShell命令
-        result = subprocess.run(["powershell", "-Command", ps_command], capture_output=True, text=True)
+        result = run_powershell_command(ps_command, timeout=25)
         
         if result.returncode == 0 and result.stdout.strip():
             # 解析JSON结果

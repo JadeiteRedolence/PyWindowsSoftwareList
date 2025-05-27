@@ -79,8 +79,22 @@ def run_powershell_command(command, timeout=30):
     try:
         powershell_path = get_powershell_path()
         
+        # 检测PowerShell版本并调整命令
+        is_pwsh7 = powershell_path.endswith('pwsh.exe')
+        
+        # 对于PowerShell 7+，将Get-WmiObject替换为Get-CimInstance
+        if is_pwsh7 and 'Get-WmiObject' in command:
+            logging.debug("Converting Get-WmiObject to Get-CimInstance for PowerShell 7+")
+            # 替换常见的WMI命令
+            command = command.replace('Get-WmiObject -Class Win32_Processor', 'Get-CimInstance -ClassName Win32_Processor')
+            command = command.replace('Get-WmiObject -Class Win32_PhysicalMemory', 'Get-CimInstance -ClassName Win32_PhysicalMemory')
+            command = command.replace('Get-WmiObject -Class Win32_VideoController', 'Get-CimInstance -ClassName Win32_VideoController')
+            command = command.replace('Get-WmiObject Win32_BaseBoard', 'Get-CimInstance -ClassName Win32_BaseBoard')
+            command = command.replace('Get-WmiObject Win32_BIOS', 'Get-CimInstance -ClassName Win32_BIOS')
+            command = command.replace('Get-WmiObject Win32_PnPSignedDriver', 'Get-CimInstance -ClassName Win32_PnPSignedDriver')
+        
         # 构建完整命令，确保使用UTF-8编码
-        if powershell_path.endswith('pwsh.exe'):
+        if is_pwsh7:
             # PowerShell 7+ 支持更好的Unicode
             full_cmd = [powershell_path, '-Command', command]
         else:
@@ -112,6 +126,57 @@ def run_powershell_command(command, timeout=30):
         return subprocess.CompletedProcess([], returncode=1, stdout="", stderr=f"Command timed out after {timeout} seconds")
     except Exception as e:
         logging.error(f"Error executing PowerShell command: {e}")
+        return subprocess.CompletedProcess([], returncode=1, stdout="", stderr=str(e))
+
+def run_wmic_command(wmi_class, properties=None, timeout=30):
+    """
+    使用原生WMIC工具执行WMI查询，作为PowerShell的备用方案
+    
+    参数:
+    - wmi_class: WMI类名，如 'Win32_Processor'
+    - properties: 要查询的属性列表，如果为None则查询所有
+    - timeout: 超时时间（秒）
+    
+    返回:
+    - subprocess.CompletedProcess对象
+    """
+    try:
+        # 构建WMIC命令
+        wmic_path = r"C:\Windows\System32\wbem\wmic.exe"
+        
+        # 检查WMIC是否存在
+        if not os.path.exists(wmic_path):
+            logging.warning("WMIC tool not found, trying alternative path")
+            wmic_path = "wmic"  # 使用PATH中的版本
+        
+        if properties:
+            prop_list = ",".join(properties)
+            cmd = [wmic_path, wmi_class, "get", prop_list, "/format:csv"]
+        else:
+            cmd = [wmic_path, wmi_class, "get", "/format:csv"]
+        
+        logging.debug(f"Executing WMIC command: {' '.join(cmd)}")
+        
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            shell=False,
+            encoding='gbk',  # WMIC输出通常是GBK编码
+            errors='ignore',
+            timeout=timeout
+        )
+        
+        if result.returncode != 0:
+            logging.warning(f"WMIC command failed with return code {result.returncode}: {result.stderr[:200]}")
+        
+        return result
+        
+    except subprocess.TimeoutExpired as e:
+        logging.error(f"WMIC command timed out after {timeout} seconds")
+        return subprocess.CompletedProcess([], returncode=1, stdout="", stderr=f"Command timed out after {timeout} seconds")
+    except Exception as e:
+        logging.error(f"Error executing WMIC command: {e}")
         return subprocess.CompletedProcess([], returncode=1, stdout="", stderr=str(e))
 
 def get_system_info():
@@ -169,19 +234,54 @@ def get_cpu_info():
                     logging.debug(f"Successfully retrieved CPU information for {len(cpu_info)} processors")
                 except json.JSONDecodeError as e:
                     logging.warning(f"Error parsing CPU JSON: {e}, output: {result.stdout[:100]}")
-                    
-                    # 尝试使用psutil作为后备
-                    logging.debug("Falling back to psutil for CPU info")
-                    cpu_info = [{
-                        "Name": platform.processor(),
-                        "NumberOfCores": psutil.cpu_count(logical=False),
-                        "NumberOfLogicalProcessors": psutil.cpu_count(logical=True),
-                        "Frequency": psutil.cpu_freq(),
-                    }]
+                    cpu_info = []  # 重置以便尝试备用方案
             else:
-                # 命令失败，使用psutil
                 logging.warning(f"PowerShell command failed: {result.stderr}")
-                logging.debug("Using psutil for CPU info")
+                cpu_info = []  # 重置以便尝试备用方案
+            
+            # 如果PowerShell失败，尝试使用WMIC
+            if not cpu_info:
+                logging.debug("Trying WMIC as fallback for CPU info")
+                wmic_result = run_wmic_command("cpu", ["Name", "NumberOfCores", "NumberOfLogicalProcessors", "MaxClockSpeed"])
+                
+                if wmic_result.returncode == 0 and wmic_result.stdout.strip():
+                    try:
+                        # 解析WMIC CSV输出
+                        lines = wmic_result.stdout.strip().split('\n')
+                        if len(lines) > 1:  # 跳过标题行
+                            for line in lines[1:]:
+                                if line.strip() and not line.startswith('Node,'):
+                                    fields = line.split(',')
+                                    if len(fields) >= 5:  # Node, MaxClockSpeed, Name, NumberOfCores, NumberOfLogicalProcessors
+                                        try:
+                                            cpu_item = {
+                                                "Name": fields[2].strip() if len(fields) > 2 else "",
+                                                "NumberOfCores": int(fields[3]) if fields[3].strip().isdigit() else None,
+                                                "NumberOfLogicalProcessors": int(fields[4]) if fields[4].strip().isdigit() else None,
+                                                "MaxClockSpeed": int(fields[1]) if fields[1].strip().isdigit() else None
+                                            }
+                                            
+                                            # 转换时钟速度为GHz
+                                            if cpu_item["MaxClockSpeed"]:
+                                                cpu_item["MaxClockSpeedGHz"] = round(cpu_item["MaxClockSpeed"] / 1000, 2)
+                                            
+                                            if not cpu_info:
+                                                cpu_info = []
+                                            cpu_info.append(cpu_item)
+                                            
+                                        except (ValueError, IndexError) as e:
+                                            logging.debug(f"Error parsing WMIC CPU line: {e}")
+                                            continue
+                        
+                        if cpu_info:
+                            logging.debug(f"Successfully retrieved CPU information via WMIC for {len(cpu_info)} processors")
+                        
+                    except Exception as e:
+                        logging.warning(f"Error parsing WMIC CPU output: {e}")
+            
+            # 如果仍然没有数据，使用psutil作为最后手段
+            if not cpu_info:
+                logging.debug("Using psutil for CPU info as final fallback")
                 cpu_info = [{
                     "Name": platform.processor(),
                     "NumberOfCores": psutil.cpu_count(logical=False),
@@ -236,23 +336,86 @@ def get_memory_info():
                 "usage_percent": svmem.percent
             }
             
-            # 尝试使用PowerShell获取内存模块信息
+            # 尝试获取内存模块详细信息
             logging.debug("Attempting to get memory module details via PowerShell")
-            cmd = "$PSDefaultParameterValues['Out-File:Encoding'] = 'utf8'; [System.Threading.Thread]::CurrentThread.CurrentCulture = 'en-US'; [System.Threading.Thread]::CurrentThread.CurrentUICulture = 'en-US'; Get-WmiObject -Class Win32_PhysicalMemory | Select-Object Capacity, Speed, Manufacturer, PartNumber, DeviceLocator | ConvertTo-Json"
-            result = run_powershell_command(cmd, timeout=15)
+            try:
+                ps_cmd = "$PSDefaultParameterValues['Out-File:Encoding'] = 'utf8'; [System.Threading.Thread]::CurrentThread.CurrentCulture = 'en-US'; [System.Threading.Thread]::CurrentThread.CurrentUICulture = 'en-US'; Get-WmiObject -Class Win32_PhysicalMemory | Select-Object Capacity, Speed, Manufacturer, PartNumber, DeviceLocator | ConvertTo-Json"
+                result = run_powershell_command(ps_cmd, timeout=15)
+                
+                if result.returncode == 0 and result.stdout.strip():
+                    try:
+                        memory_modules = json.loads(result.stdout)
+                        
+                        # 处理单个模块的情况
+                        if isinstance(memory_modules, dict):
+                            memory_modules = [memory_modules]
+                        
+                        # 转换容量为GB
+                        for module in memory_modules:
+                            if "Capacity" in module and module["Capacity"]:
+                                try:
+                                    capacity_bytes = int(module["Capacity"])
+                                    capacity_gb = round(capacity_bytes / (1024**3), 2)
+                                    module["Capacity"] = f"{capacity_gb} GB"
+                                except (ValueError, TypeError):
+                                    module["Capacity"] = "Unknown"
+                        
+                        memory_info["modules"] = memory_modules
+                        logging.debug(f"Found {len(memory_modules)} memory modules")
+                    except json.JSONDecodeError as e:
+                        logging.warning(f"Error parsing memory modules JSON: {e}")
+                else:
+                    logging.warning(f"Failed to get memory module details: {result.stderr}")
+            except Exception as e:
+                logging.warning(f"Error getting memory module details: {e}")
             
-            if result.returncode == 0 and result.stdout.strip():
-                try:
-                    memory_modules = json.loads(result.stdout)
-                    
-                    # 处理单内存条和多内存条的情况
-                    if isinstance(memory_modules, dict):
-                        memory_modules = [memory_modules]
-                    
-                    memory_info["modules"] = memory_modules
-                    logging.debug(f"Found {len(memory_modules)} memory modules")
-                except json.JSONDecodeError as e:
-                    logging.warning(f"Error parsing memory modules JSON: {e}")
+            # 如果PowerShell失败，尝试使用WMIC获取内存模块信息
+            if "modules" not in memory_info or not memory_info["modules"]:
+                logging.debug("Trying WMIC as fallback for memory module info")
+                wmic_result = run_wmic_command("memorychip", ["Capacity", "Speed", "Manufacturer", "PartNumber", "DeviceLocator"])
+                
+                if wmic_result.returncode == 0 and wmic_result.stdout.strip():
+                    try:
+                        # 解析WMIC CSV输出
+                        lines = wmic_result.stdout.strip().split('\n')
+                        memory_modules = []
+                        
+                        if len(lines) > 1:  # 跳过标题行
+                            for line in lines[1:]:
+                                if line.strip() and not line.startswith('Node,'):
+                                    fields = line.split(',')
+                                    if len(fields) >= 6:  # Node, Capacity, DeviceLocator, Manufacturer, PartNumber, Speed
+                                        try:
+                                            capacity_str = fields[1].strip() if len(fields) > 1 else ""
+                                            
+                                            # 转换容量为GB
+                                            if capacity_str and capacity_str.isdigit():
+                                                capacity_bytes = int(capacity_str)
+                                                capacity_gb = round(capacity_bytes / (1024**3), 2)
+                                                capacity_display = f"{capacity_gb} GB"
+                                            else:
+                                                capacity_display = "Unknown"
+                                            
+                                            module_item = {
+                                                "Capacity": capacity_display,
+                                                "DeviceLocator": fields[2].strip() if len(fields) > 2 else "",
+                                                "Manufacturer": fields[3].strip() if len(fields) > 3 else "",
+                                                "PartNumber": fields[4].strip() if len(fields) > 4 else "",
+                                                "Speed": fields[5].strip() if len(fields) > 5 else ""
+                                            }
+                                            
+                                            memory_modules.append(module_item)
+                                            
+                                        except (ValueError, IndexError) as e:
+                                            logging.debug(f"Error parsing WMIC memory line: {e}")
+                                            continue
+                        
+                        if memory_modules:
+                            memory_info["modules"] = memory_modules
+                            logging.debug(f"Successfully retrieved memory module information via WMIC for {len(memory_modules)} modules")
+                        
+                    except Exception as e:
+                        logging.warning(f"Error parsing WMIC memory output: {e}")
         else:
             # Linux系统
             memory_info = {"platform_not_supported": True}
@@ -421,8 +584,62 @@ def get_graphics_info():
                     logging.debug(f"Found {len(gpu_data)} graphics adapters")
                 except json.JSONDecodeError as e:
                     logging.warning(f"Error parsing graphics card JSON: {e}, output: {result.stdout[:100]}")
+                    gpu_data = []
             else:
                 logging.warning(f"Failed to get graphics information: {result.stderr}")
+                gpu_data = []
+            
+            # 如果PowerShell失败，尝试使用WMIC
+            if "adapters" not in graphics_info or not graphics_info["adapters"]:
+                logging.debug("Trying WMIC as fallback for graphics info")
+                wmic_result = run_wmic_command("path win32_videocontroller", ["Name", "AdapterRAM", "DriverVersion", "VideoProcessor"])
+                
+                if wmic_result.returncode == 0 and wmic_result.stdout.strip():
+                    try:
+                        # 解析WMIC CSV输出
+                        lines = wmic_result.stdout.strip().split('\n')
+                        gpu_data = []
+                        
+                        if len(lines) > 1:  # 跳过标题行
+                            for line in lines[1:]:
+                                if line.strip() and not line.startswith('Node,'):
+                                    fields = line.split(',')
+                                    if len(fields) >= 5:  # Node, AdapterRAM, DriverVersion, Name, VideoProcessor
+                                        try:
+                                            gpu_item = {
+                                                "Name": fields[3].strip() if len(fields) > 3 else "",
+                                                "AdapterRAM": fields[1].strip() if len(fields) > 1 else "",
+                                                "DriverVersion": fields[2].strip() if len(fields) > 2 else "",
+                                                "VideoProcessor": fields[4].strip() if len(fields) > 4 else ""
+                                            }
+                                            
+                                            # 转换显存大小
+                                            if gpu_item["AdapterRAM"] and gpu_item["AdapterRAM"].isdigit():
+                                                try:
+                                                    ram_bytes = int(gpu_item["AdapterRAM"])
+                                                    gpu_item["VideoRAM_GB"] = round(ram_bytes / (1024**3), 2)
+                                                except (ValueError, TypeError):
+                                                    gpu_item["VideoRAM_GB"] = "Unknown"
+                                            else:
+                                                gpu_item["VideoRAM_GB"] = "Unknown"
+                                            
+                                            gpu_data.append(gpu_item)
+                                            
+                                        except (ValueError, IndexError) as e:
+                                            logging.debug(f"Error parsing WMIC graphics line: {e}")
+                                            continue
+                        
+                        if gpu_data:
+                            graphics_info["adapters"] = gpu_data
+                            logging.debug(f"Successfully retrieved graphics information via WMIC for {len(gpu_data)} adapters")
+                        
+                    except Exception as e:
+                        logging.warning(f"Error parsing WMIC graphics output: {e}")
+            
+            # 如果仍然没有数据，提供基本信息
+            if "adapters" not in graphics_info or not graphics_info["adapters"]:
+                graphics_info["adapters"] = [{"Name": "Unknown", "VideoRAM_GB": "Unknown", "DriverVersion": "Unknown"}]
+                logging.debug("Using unknown graphics adapter as fallback")
         else:
             # Linux系统
             graphics_info = {"platform_not_supported": True}
@@ -794,8 +1011,36 @@ def get_motherboard_info():
         else:
             # 尝试使用备用方法
             logging.warning(f"Failed to get motherboard info: {result.stderr}")
+        
+        # 如果PowerShell失败，尝试使用WMIC
+        if not motherboard_info:
+            logging.debug("Trying WMIC as fallback for motherboard info")
+            wmic_result = run_wmic_command("baseboard", ["Manufacturer", "Product", "SerialNumber", "Version"])
             
-            # 简单的解析方法作为后备
+            if wmic_result.returncode == 0 and wmic_result.stdout.strip():
+                try:
+                    # 解析WMIC CSV输出
+                    lines = wmic_result.stdout.strip().split('\n')
+                    
+                    if len(lines) > 1:  # 跳过标题行
+                        for line in lines[1:]:
+                            if line.strip() and not line.startswith('Node,'):
+                                fields = line.split(',')
+                                if len(fields) >= 5:  # Node, Manufacturer, Product, SerialNumber, Version
+                                    motherboard_info = {
+                                        "Manufacturer": fields[1].strip() if len(fields) > 1 else "",
+                                        "Product": fields[2].strip() if len(fields) > 2 else "",
+                                        "SerialNumber": fields[3].strip() if len(fields) > 3 else "",
+                                        "Version": fields[4].strip() if len(fields) > 4 else ""
+                                    }
+                                    logging.debug("Successfully retrieved motherboard information via WMIC")
+                                    break
+                except Exception as e:
+                    logging.warning(f"Error parsing WMIC motherboard output: {e}")
+        
+        # 如果仍然失败，尝试简单的解析方法作为后备
+        if not motherboard_info:
+            logging.debug("Trying simple PowerShell format as final fallback")
             cmd = "Get-WmiObject Win32_BaseBoard | Format-List Manufacturer, Product, SerialNumber, Version"
             result = run_powershell_command(cmd, timeout=10)
             
@@ -804,6 +1049,17 @@ def get_motherboard_info():
                     if ':' in line:
                         key, value = line.split(':', 1)
                         motherboard_info[key.strip()] = value.strip()
+                        
+        # 如果还是没有数据，提供基本信息
+        if not motherboard_info:
+            motherboard_info = {
+                "Manufacturer": "Unknown",
+                "Product": "Unknown", 
+                "SerialNumber": "Unknown",
+                "Version": "Unknown"
+            }
+            logging.debug("Using unknown motherboard info as final fallback")
+            
     except Exception as e:
         logging.error(f"Error getting motherboard information: {e}", exc_info=True)
         motherboard_info["error"] = str(e)
@@ -829,14 +1085,70 @@ def get_bios_info():
             try:
                 bios_data = json.loads(result.stdout)
                 bios_info = bios_data
+                
+                # 处理BIOS日期格式
+                if "ReleaseDate" in bios_info and bios_info["ReleaseDate"]:
+                    # WMI返回的日期格式通常是 YYYYMMDDHHMMSS.MMMMMM+MMM
+                    release_date = bios_info["ReleaseDate"]
+                    try:
+                        if len(release_date) >= 8:
+                            # 确保前8个字符都是数字
+                            date_part = release_date[:8]
+                            if date_part.isdigit():
+                                formatted_date = f"{date_part[0:4]}-{date_part[4:6]}-{date_part[6:8]}"
+                                bios_info["ReleaseDate"] = formatted_date
+                    except:
+                        pass  # 保持原格式
+                
                 logging.debug("Successfully retrieved BIOS information")
             except json.JSONDecodeError as e:
                 logging.warning(f"Error parsing BIOS JSON: {e}, output: {result.stdout[:100]}")
         else:
             # 尝试使用备用方法
             logging.warning(f"Failed to get BIOS info: {result.stderr}")
+        
+        # 如果PowerShell失败，尝试使用WMIC
+        if not bios_info:
+            logging.debug("Trying WMIC as fallback for BIOS info")
+            wmic_result = run_wmic_command("bios", ["Manufacturer", "Name", "SMBIOSBIOSVersion", "ReleaseDate"])
             
-            # 简单的解析方法作为后备
+            if wmic_result.returncode == 0 and wmic_result.stdout.strip():
+                try:
+                    # 解析WMIC CSV输出
+                    lines = wmic_result.stdout.strip().split('\n')
+                    
+                    if len(lines) > 1:  # 跳过标题行
+                        for line in lines[1:]:
+                            if line.strip() and not line.startswith('Node,'):
+                                fields = line.split(',')
+                                if len(fields) >= 5:  # Node, Manufacturer, Name, ReleaseDate, SMBIOSBIOSVersion
+                                    bios_info = {
+                                        "Manufacturer": fields[1].strip() if len(fields) > 1 else "",
+                                        "Name": fields[2].strip() if len(fields) > 2 else "",
+                                        "ReleaseDate": fields[3].strip() if len(fields) > 3 else "",
+                                        "SMBIOSBIOSVersion": fields[4].strip() if len(fields) > 4 else ""
+                                    }
+                                    
+                                    # 处理BIOS日期格式
+                                    if bios_info["ReleaseDate"] and len(bios_info["ReleaseDate"]) >= 8:
+                                        try:
+                                            release_date = bios_info["ReleaseDate"]
+                                            # 确保前8个字符都是数字
+                                            date_part = release_date[:8]
+                                            if date_part.isdigit():
+                                                formatted_date = f"{date_part[0:4]}-{date_part[4:6]}-{date_part[6:8]}"
+                                                bios_info["ReleaseDate"] = formatted_date
+                                        except:
+                                            pass  # 保持原格式
+                                    
+                                    logging.debug("Successfully retrieved BIOS information via WMIC")
+                                    break
+                except Exception as e:
+                    logging.warning(f"Error parsing WMIC BIOS output: {e}")
+        
+        # 如果仍然失败，尝试简单的解析方法作为后备
+        if not bios_info:
+            logging.debug("Trying simple PowerShell format as final fallback")
             cmd = "Get-WmiObject Win32_BIOS | Format-List Manufacturer, Name, SMBIOSBIOSVersion, ReleaseDate"
             result = run_powershell_command(cmd, timeout=10)
             
@@ -845,6 +1157,17 @@ def get_bios_info():
                     if ':' in line:
                         key, value = line.split(':', 1)
                         bios_info[key.strip()] = value.strip()
+        
+        # 如果还是没有数据，提供基本信息
+        if not bios_info:
+            bios_info = {
+                "Manufacturer": "Unknown",
+                "Name": "Unknown", 
+                "SMBIOSBIOSVersion": "Unknown",
+                "ReleaseDate": "Unknown"
+            }
+            logging.debug("Using unknown BIOS info as final fallback")
+            
     except Exception as e:
         logging.error(f"Error getting BIOS information: {e}", exc_info=True)
         bios_info["error"] = str(e)

@@ -4,6 +4,7 @@ import json
 import winreg
 from datetime import datetime
 from .system_info_collector import run_powershell_command
+import logging
 
 def get_installed_software_from_registry(registry_key, flag=0):
     """
@@ -152,6 +153,27 @@ def get_uwp_apps():
     uwp_apps = []
     
     try:
+        # 首先检查是否支持UWP应用（需要Windows 10+）
+        import platform
+        import sys
+        
+        if platform.system() != "Windows":
+            logging.debug("UWP apps are only available on Windows platform")
+            return uwp_apps
+        
+        # 检查Windows版本
+        try:
+            import winreg
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion")
+            build_number, _ = winreg.QueryValueEx(key, "CurrentBuildNumber")
+            winreg.CloseKey(key)
+            
+            if int(build_number) < 10240:  # Windows 10的最低版本
+                logging.debug(f"UWP apps require Windows 10+, current build: {build_number}")
+                return uwp_apps
+        except:
+            logging.debug("Could not determine Windows version for UWP support")
+        
         # PowerShell命令获取UWP应用
         ps_command = "Get-AppxPackage | Select-Object Name, PackageFullName, Version, Publisher | ConvertTo-Json"
         
@@ -178,12 +200,18 @@ def get_uwp_apps():
                     }
                     
                     uwp_apps.append(app_info)
+                    
+                logging.debug(f"Successfully retrieved {len(uwp_apps)} UWP applications")
             except json.JSONDecodeError as e:
-                print(f"Error parsing UWP apps output: {e}")
+                logging.warning(f"Error parsing UWP apps output: {e}")
         else:
-            print(f"PowerShell command for UWP apps failed: {result.stderr}")
+            # 检查是否是由于不支持造成的失败
+            if "not supported on this platform" in result.stderr or "could not be loaded" in result.stderr:
+                logging.info("UWP apps are not supported on this platform or PowerShell version")
+            else:
+                logging.warning(f"PowerShell command for UWP apps failed: {result.stderr}")
     except Exception as e:
-        print(f"Error running PowerShell command for UWP apps: {e}")
+        logging.warning(f"Error running PowerShell command for UWP apps: {e}")
     
     return uwp_apps
 
